@@ -99,3 +99,11 @@ wt_post_create() {
 ## License
 
 MIT
+
+## Releasing (maintainer)
+
+```bash
+./release.sh 0.1.1
+```
+
+Bumps `WT_VERSION`, commits, tags `v<version>`, pushes, then updates `url` + `sha256` in the tap formula (`../homebrew-tap/Formula/wt.rb`, override with `WT_TAP_DIR`) and pushes that too. Users get the new version with `brew update && brew upgrade wt`.
