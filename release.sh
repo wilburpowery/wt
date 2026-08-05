@@ -13,8 +13,8 @@ sed -i '' "s/^WT_VERSION=.*/WT_VERSION=\"$V\"/" "$ROOT/wt"
 bash -n "$ROOT/wt"
 
 git -C "$ROOT" add wt
-git -C "$ROOT" commit --no-gpg-sign -m "Release v$V"
-git -C "$ROOT" tag -a "v$V" --no-sign -m "v$V"
+git -C "$ROOT" commit -m "Release v$V"
+git -C "$ROOT" tag -a "v$V" -m "v$V"
 git -C "$ROOT" push origin main --tags
 
 echo "▸ Computing tarball sha256"
@@ -29,7 +29,7 @@ sed -i '' \
   "$TAP/Formula/wt.rb"
 
 git -C "$TAP" add Formula/wt.rb
-git -C "$TAP" commit --no-gpg-sign -m "wt $V"
+git -C "$TAP" commit -m "wt $V"
 git -C "$TAP" push origin main
 
 echo ""
