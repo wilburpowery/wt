@@ -26,7 +26,6 @@ command -v herd >/dev/null 2>&1 || {
 WT_APP_DIR="."
 WT_PHP=""
 WT_BRANCH_PREFIX="$(git config --get wt.branchPrefix 2>/dev/null || true)"
-WT_MYSQL="mysql -h127.0.0.1 -P3306 -uroot"
 WT_COPY=()
 WT_DB_SOURCE="__auto__"
 WT_TEST_DB_SOURCE=""
@@ -120,6 +119,98 @@ free_port() {
   exit 1
 }
 
+# ── database layer: connection derived from the app's .env ──────────────────
+env_val() {
+  sed -n "s/^$1=//p" "$2" 2>/dev/null | head -1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+
+load_db_config() {
+  local env="$MAIN_ROOT/$WT_APP_DIR/.env"
+  DBC_DRIVER="$(env_val DB_CONNECTION "$env")"
+  DBC_HOST="$(env_val DB_HOST "$env")"
+  DBC_PORT="$(env_val DB_PORT "$env")"
+  DBC_USER="$(env_val DB_USERNAME "$env")"
+  DBC_PASS="$(env_val DB_PASSWORD "$env")"
+
+  case "$DBC_DRIVER" in
+    pgsql)
+      DBC_HOST="${DBC_HOST:-127.0.0.1}"
+      DBC_PORT="${DBC_PORT:-5432}"
+      DBC_USER="${DBC_USER:-postgres}"
+      ;;
+    sqlite) ;;
+    *)
+      DBC_DRIVER="${DBC_DRIVER:-mysql}"
+      DBC_HOST="${DBC_HOST:-127.0.0.1}"
+      DBC_PORT="${DBC_PORT:-3306}"
+      DBC_USER="${DBC_USER:-root}"
+      ;;
+  esac
+
+  if [[ "$WT_DB_SOURCE" == "__auto__" ]]; then
+    if [[ "$DBC_DRIVER" == "sqlite" ]]; then
+      WT_DB_SOURCE=""
+    else
+      WT_DB_SOURCE="$(env_val DB_DATABASE "$env")"
+    fi
+  fi
+}
+
+db_sql() {
+  if [[ "$DBC_DRIVER" == "pgsql" ]]; then
+    PGPASSWORD="$DBC_PASS" psql -h "$DBC_HOST" -p "$DBC_PORT" -U "$DBC_USER" -d postgres -Atc "$1"
+  else
+    MYSQL_PWD="$DBC_PASS" mysql -h"$DBC_HOST" -P"$DBC_PORT" -u"$DBC_USER" -N -e "$1"
+  fi
+}
+
+db_create() {
+  if [[ "$DBC_DRIVER" == "pgsql" ]]; then
+    [[ -n "$(db_sql "SELECT 1 FROM pg_database WHERE datname = '$1'")" ]] || db_sql "CREATE DATABASE \"$1\"" >/dev/null
+  else
+    db_sql "CREATE DATABASE IF NOT EXISTS \`$1\`;"
+  fi
+}
+
+db_drop() {
+  if [[ "$DBC_DRIVER" == "pgsql" ]]; then
+    db_sql "DROP DATABASE IF EXISTS \"$1\"" >/dev/null
+  else
+    db_sql "DROP DATABASE IF EXISTS \`$1\`;"
+  fi
+}
+
+db_clone() {
+  local source="$1" target="$2"
+  db_create "$target"
+  if [[ "$DBC_DRIVER" == "pgsql" ]]; then
+    PGPASSWORD="$DBC_PASS" pg_dump -h "$DBC_HOST" -p "$DBC_PORT" -U "$DBC_USER" "$source" \
+      | PGPASSWORD="$DBC_PASS" psql -h "$DBC_HOST" -p "$DBC_PORT" -U "$DBC_USER" -d "$target" -q
+  else
+    MYSQL_PWD="$DBC_PASS" mysqldump -h"$DBC_HOST" -P"$DBC_PORT" -u"$DBC_USER" --single-transaction --routines "$source" \
+      | MYSQL_PWD="$DBC_PASS" mysql -h"$DBC_HOST" -P"$DBC_PORT" -u"$DBC_USER" "$target"
+  fi
+}
+
+db_list_prefix() {
+  if [[ "$DBC_DRIVER" == "pgsql" ]]; then
+    db_sql "SELECT datname FROM pg_database WHERE datname LIKE '${1}\\_%' ESCAPE '\\'"
+  else
+    db_sql "SHOW DATABASES LIKE '${1}\\_%';"
+  fi
+}
+
+copy_sqlite() {
+  local wt="$1" f
+  for f in "$MAIN_ROOT/$WT_APP_DIR/database/"*.sqlite*; do
+    [[ -f "$f" ]] || continue
+    cp -c "$f" "$wt/$WT_APP_DIR/database/$(basename "$f")" 2>/dev/null \
+      || cp "$f" "$wt/$WT_APP_DIR/database/$(basename "$f")"
+    echo "▸ Copied SQLite database $(basename "$f")"
+  done
+  return 0
+}
+
 # ── config: global, then per-repo ───────────────────────────────────────────
 [[ -f "$HOME/.wtrc" ]] && source "$HOME/.wtrc"
 [[ -f "$MAIN_ROOT/.wtrc" ]] && source "$MAIN_ROOT/.wtrc"
@@ -138,6 +229,8 @@ Usage:
 
 Config: ~/.wtrc (global), then <repo>/.wtrc (per repo; add it to
 .git/info/exclude). Zero config works for a plain Laravel repo served by Herd.
+The database connection (driver, host, port, credentials) is read from the
+app's .env — MySQL/MariaDB and Postgres are supported; SQLite files are copied.
 EOF
   exit 1
 }
@@ -150,12 +243,6 @@ default_branch() {
     return
   fi
   git -C "$MAIN_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||' || echo main
-}
-
-resolve_db_source() {
-  if [[ "$WT_DB_SOURCE" == "__auto__" ]]; then
-    WT_DB_SOURCE="$(sed -n 's/^DB_DATABASE=//p' "$MAIN_ROOT/$WT_APP_DIR/.env" 2>/dev/null | head -1)"
-  fi
 }
 
 add_worktree() {
@@ -208,19 +295,13 @@ rewrite_env() {
 
   if [[ -n "$WT_TEST_DB_SOURCE" ]]; then
     cat > "$wt/$WT_APP_DIR/.env.testing.local" <<EOF
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_USERNAME=root
-DB_PASSWORD=
+DB_HOST=$DBC_HOST
+DB_PORT=$DBC_PORT
+DB_USERNAME=$DBC_USER
+DB_PASSWORD=$DBC_PASS
 DB_DATABASE=$(slug_db "$WT_TEST_DB_SOURCE" "$slug")
 EOF
   fi
-}
-
-clone_db() {
-  local source="$1" target="$2"
-  $WT_MYSQL -e "CREATE DATABASE IF NOT EXISTS \`$target\`;"
-  mysqldump -h127.0.0.1 -P3306 -uroot --single-transaction --routines "$source" | $WT_MYSQL "$target"
 }
 
 host_from_worktree() {
@@ -244,7 +325,7 @@ cmd_new() {
   [[ "$slug" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "✗ slug must be kebab-case" >&2; exit 1; }
   branch="${branch:-${WT_BRANCH_PREFIX}${slug}}"
 
-  resolve_db_source
+  load_db_config
   local wt="$WT_BASE/$slug" db="" tdb="" host site
   [[ -n "$WT_DB_SOURCE" ]] && db="$(slug_db "$WT_DB_SOURCE" "$slug")"
   [[ -n "$WT_TEST_DB_SOURCE" ]] && tdb="$(slug_db "$WT_TEST_DB_SOURCE" "$slug")"
@@ -256,6 +337,7 @@ cmd_new() {
 
   echo "▸ Copying local config"
   copy_config "$wt"
+  [[ "$DBC_DRIVER" == "sqlite" ]] && copy_sqlite "$wt"
 
   rewrite_env "$wt" "$slug" "$host" "$db"
   wt_env_extra "$wt" "$slug" "$host" "$db"
@@ -265,11 +347,11 @@ cmd_new() {
 
   if [[ -n "$db" ]]; then
     echo "▸ Cloning database ($WT_DB_SOURCE → $db)"
-    clone_db "$WT_DB_SOURCE" "$db"
+    db_clone "$WT_DB_SOURCE" "$db"
   fi
   if [[ -n "$tdb" ]]; then
     echo "▸ Cloning test database ($WT_TEST_DB_SOURCE → $tdb)"
-    clone_db "$WT_TEST_DB_SOURCE" "$tdb"
+    db_clone "$WT_TEST_DB_SOURCE" "$tdb"
   fi
 
   echo "▸ Installing dependencies"
@@ -288,7 +370,7 @@ cmd_new() {
 
 cmd_rm() {
   local slug="$1" force="${2:-}"
-  resolve_db_source
+  load_db_config
   local wt="$WT_BASE/$slug" db="" tdb="" host site
   [[ -n "$WT_DB_SOURCE" ]] && db="$(slug_db "$WT_DB_SOURCE" "$slug")"
   [[ -n "$WT_TEST_DB_SOURCE" ]] && tdb="$(slug_db "$WT_TEST_DB_SOURCE" "$slug")"
@@ -312,15 +394,15 @@ cmd_rm() {
 
   if [[ -n "$db" || -n "$tdb" ]]; then
     echo "▸ Dropping databases ${db:+$db }${tdb:+$tdb}"
-    [[ -n "$db" ]] && $WT_MYSQL -e "DROP DATABASE IF EXISTS \`$db\`;"
-    [[ -n "$tdb" ]] && $WT_MYSQL -e "DROP DATABASE IF EXISTS \`$tdb\`;"
+    [[ -n "$db" ]] && db_drop "$db"
+    [[ -n "$tdb" ]] && db_drop "$tdb"
   fi
 
   echo "✓ Removed. Branch was kept — delete with: git branch -d <branch>"
 }
 
 cmd_list() {
-  resolve_db_source
+  load_db_config
   local found=0 wt slug branch url db tdb
   if [[ -d "$WT_BASE" ]]; then
     for wt in "$WT_BASE"/*/; do
@@ -345,14 +427,14 @@ cmd_list() {
   fi
   [[ "$found" -eq 1 ]] || echo "No worktrees in $WT_BASE"
 
-  if [[ -n "$WT_DB_SOURCE" ]]; then
+  if [[ -n "$WT_DB_SOURCE" && "$DBC_DRIVER" != "sqlite" ]]; then
     local orphans="" dbrow
     while IFS= read -r dbrow; do
       slug="$(echo "${dbrow#"${WT_DB_SOURCE}"_}" | tr '_' '-')"
       [[ -d "$WT_BASE/$slug" ]] || orphans+="  $dbrow"$'\n'
-    done < <($WT_MYSQL -N -e "SHOW DATABASES LIKE '${WT_DB_SOURCE}\\_%';" 2>/dev/null)
+    done < <(db_list_prefix "$WT_DB_SOURCE" 2>/dev/null)
     if [[ -n "$orphans" ]]; then
-      echo "Orphaned worktree DBs (no matching worktree — drop with: mysql -h127.0.0.1 -uroot -e 'DROP DATABASE <name>'):"
+      echo "Orphaned worktree DBs (no matching worktree — drop with wt rm, or manually):"
       printf '%s' "$orphans"
     fi
   fi

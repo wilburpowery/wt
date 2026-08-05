@@ -24,7 +24,7 @@ Or drop the `wt` script anywhere on your PATH.
 
 - macOS (APFS is used for copy-on-write dependency cloning)
 - [Laravel Herd](https://herd.laravel.com) serving your app (free tier is fine)
-- A local MySQL on `127.0.0.1:3306` reachable as `root` with no password (e.g. [DBngin](https://dbngin.com)) — configurable via `WT_MYSQL`
+- A local database for the app — **MySQL/MariaDB or Postgres** (any provider: [DBngin](https://dbngin.com), Herd Pro services, Homebrew, …). `wt` reads `DB_CONNECTION`, `DB_HOST`, `DB_PORT`, `DB_USERNAME`, and `DB_PASSWORD` from the app's `.env` for its own create/clone/drop operations, so wherever the app connects, `wt` connects. **SQLite** apps work too: the database file is simply copied into the worktree. Client CLIs (`mysql`/`mysqldump` or `psql`/`pg_dump`) must be on PATH for the server drivers.
 
 ## What `wt new <slug>` does
 
@@ -32,7 +32,7 @@ Or drop the `wt` script anywhere on your PATH.
 2. **Copies your git-ignored config** (`.env`, certs, keys) from the main checkout — worktrees only share tracked files.
 3. **Rewrites the env for isolation** — `APP_URL`, `SESSION_DOMAIN`, and `DB_DATABASE` point at slug-specific values.
 4. **Links the site in Herd** (`herd link <slug> --secure`, with `--isolate` when a PHP version is configured) — *before* installing anything, because unlinked directories float to the newest installed PHP and break `composer install` on version-pinned apps.
-5. **Clones the database** — `mysqldump --single-transaction` into `<db>_<slug>`, so migrations in the worktree can't touch your main data.
+5. **Clones the database** — `mysqldump --single-transaction` or `pg_dump`, depending on `DB_CONNECTION`, into `<db>_<slug>`, so migrations in the worktree can't touch your main data. Connection details come from the app's `.env`.
 6. **Clones dependencies via APFS copy-on-write** — every `node_modules` and composer `vendor` in the main checkout is cloned with `cp -c` (instant, near-zero disk), then the real installers run as a fast reconcile against the worktree branch's lockfiles.
 7. **Builds frontend assets** when the app has a `vite.config.*` and a `build` script (Laravel 500s without `public/build/manifest.json`, which is git-ignored).
 8. **Runs migrations.**
@@ -52,11 +52,10 @@ For everything else there are two bash config files, sourced in order: `~/.wtrc`
 | `WT_APP_DIR` | `.` | Where the Laravel app lives (e.g. `apps/backend` in a monorepo) |
 | `WT_PHP` | none | PHP version for `herd link --isolate` |
 | `WT_BRANCH_PREFIX` | `git config wt.branchPrefix`, else empty | New branches become `<prefix><slug>` |
-| `WT_DB_SOURCE` | derived from `.env` | Database to clone |
+| `WT_DB_SOURCE` | derived from `.env` | Database to clone (connection driver/host/port/credentials always come from the app's `.env`) |
 | `WT_TEST_DB_SOURCE` | none | Optional second (test) database to clone; also writes `.env.testing.local` |
 | `WT_COPY` | auto (`.env` files) | Repo-relative paths to copy into new worktrees |
 | `WT_DEFAULT_BRANCH` | from `origin/HEAD` | Base for new branches |
-| `WT_MYSQL` | `mysql -h127.0.0.1 -P3306 -uroot` | MySQL CLI connection |
 
 ### Hooks
 
