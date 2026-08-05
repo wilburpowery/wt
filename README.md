@@ -4,7 +4,7 @@ Instant Laravel worktrees with [Laravel Herd](https://herd.laravel.com). One com
 
 ```bash
 wt new sup-1234
-# a few minutes later: https://sup-1234.test is a fully working app
+# a few minutes later: https://sup-1234.myapp.test is a fully working app
 
 wt rm sup-1234
 # site unlinked, databases dropped, worktree removed
@@ -31,7 +31,7 @@ Or drop the `wt` script anywhere on your PATH.
 1. **Resolves the branch** — existing local branch, else fetch + track `origin/<branch>`, else a new branch off the repo's default branch (read from `origin/HEAD`, so `main` and `master` repos both work). Branch name defaults to `<prefix><slug>`.
 2. **Copies your git-ignored config** (`.env`, certs, keys) from the main checkout — worktrees only share tracked files.
 3. **Rewrites the env for isolation** — `APP_URL`, `SESSION_DOMAIN`, and `DB_DATABASE` point at slug-specific values.
-4. **Links the site in Herd** (`herd link <slug> --secure`, with `--isolate` when a PHP version is configured) — *before* installing anything, because unlinked directories float to the newest installed PHP and break `composer install` on version-pinned apps.
+4. **Links the site in Herd** as a subdomain of the main app (`APP_URL=https://myapp.test` gives `https://<slug>.myapp.test` — visually grouped, cookie-compatible, still isolated) (`herd link`, with `--isolate` when a PHP version is configured) — *before* installing anything, because unlinked directories float to the newest installed PHP and break `composer install` on version-pinned apps.
 5. **Clones the database** — `mysqldump --single-transaction` or `pg_dump`, depending on `DB_CONNECTION`, into `<db>_<slug>`, so migrations in the worktree can't touch your main data. Connection details come from the app's `.env`.
 6. **Clones dependencies via APFS copy-on-write** — every `node_modules` and composer `vendor` in the main checkout is cloned with `cp -c` (instant, near-zero disk), then the real installers run as a fast reconcile against the worktree branch's lockfiles.
 7. **Builds frontend assets** when the app has a `vite.config.*` and a `build` script (Laravel 500s without `public/build/manifest.json`, which is git-ignored).
@@ -63,7 +63,7 @@ Define bash functions in a `.wtrc` to replace any lifecycle step. Hooks run insi
 
 | Hook | Default behavior |
 | --- | --- |
-| `wt_host <slug>` | echoes `<slug>.test` |
+| `wt_host <slug>` | echoes `<slug>.<parent host>` (parent host from the app's `APP_URL`, e.g. `demo1.myapp.test`) |
 | `wt_env_extra <wt> <slug> <host> <db>` | no-op (extra env rewrites) |
 | `wt_install <wt>` | CoW-clone deps, then npm/pnpm/yarn + composer reconcile |
 | `wt_post_create <wt>` | build Vite assets if present, `php artisan migrate` |

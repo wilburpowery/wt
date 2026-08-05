@@ -32,7 +32,13 @@ WT_TEST_DB_SOURCE=""
 WT_DEFAULT_BRANCH=""
 WT_FLAGS=()
 
-wt_host() { echo "$1.test"; }
+parent_host() {
+  local h
+  h="$(env_val APP_URL "$MAIN_ROOT/$WT_APP_DIR/.env" | sed -e 's|^https\{0,1\}://||' -e 's|/.*$||')"
+  echo "${h:-$(basename "$MAIN_ROOT").test}"
+}
+
+wt_host() { echo "$1.$(parent_host)"; }
 wt_env_extra() { :; }
 wt_install() {
   local wt="$1"
