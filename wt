@@ -200,6 +200,29 @@ db_list_prefix() {
   fi
 }
 
+warn_nameless_npm() {
+  local wt="$1"
+  [[ -f "$wt/package-lock.json" && -f "$wt/package.json" ]] || return 0
+  grep -q '"name"' "$wt/package.json" && return 0
+  echo "⚠ package.json has no \"name\" field — npm infers one from the directory and"
+  echo "  rewrites package-lock.json in every worktree. Add a name to stop this;"
+  echo "  wt rm absorbs the rewrite in the meantime."
+  return 0
+}
+
+absorb_lockfile_rename() {
+  local wt="$1" lock="package-lock.json" total named
+  [[ -f "$wt/$lock" ]] || return 0
+  [[ "$(git -C "$wt" status --porcelain)" == " M $lock" ]] || return 0
+  total="$(git -C "$wt" diff -- "$lock" | grep -c '^[+-][^+-]' || true)"
+  named="$(git -C "$wt" diff -- "$lock" | grep -c '^[+-][[:space:]]*"name":' || true)"
+  if [[ "$total" -gt 0 && "$named" -eq "$total" ]]; then
+    git -C "$wt" checkout -- "$lock"
+    echo "▸ Restored $lock (npm had renamed it after the worktree directory)"
+  fi
+  return 0
+}
+
 copy_sqlite() {
   local wt="$1" f
   for f in "$MAIN_ROOT/$WT_APP_DIR/database/"*.sqlite*; do
@@ -356,6 +379,7 @@ cmd_new() {
 
   echo "▸ Installing dependencies"
   wt_install "$wt"
+  warn_nameless_npm "$wt"
 
   wt_post_create "$wt"
 
@@ -383,6 +407,8 @@ cmd_rm() {
 
   echo "▸ Unlinking Herd site ${site:-$slug}"
   (cd "$wt/$WT_APP_DIR" && herd unlink "${site:-$slug}" >/dev/null 2>&1) || true
+
+  absorb_lockfile_rename "$wt"
 
   echo "▸ Removing worktree"
   if [[ "$force" == "--force" ]]; then

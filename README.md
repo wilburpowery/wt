@@ -93,7 +93,7 @@ wt_post_create() {
 - **Link before composer.** Herd resolves PHP per site; unlinked dirs float to the newest PHP and locked dependencies explode.
 - **Never use Herd's `composer`/bare `php` shims** for this — they ignore site isolation. `wt` runs composer's phar under `herd php`, which resolves isolation from the working directory.
 - **Git-ignored runtime artifacts don't exist in fresh worktrees** — built assets, package `dist/` folders. Anything your app needs at runtime that isn't tracked needs a build step (the defaults handle the common Laravel + Vite case).
-- **`package.json` without a `name` field** makes npm rewrite `package-lock.json` in every worktree (it infers the name from the directory). Add a `name`.
+- **`package.json` without a `name` field** (Laravel's default!) makes npm rewrite `package-lock.json` in every worktree, because npm infers the name from the directory. `wt` warns about this at create time, and `wt rm` automatically restores the lockfile when that rename is the only change. Adding a `name` to your `package.json` is the real fix.
 
 ## License
 
