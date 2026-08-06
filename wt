@@ -5,22 +5,35 @@ WT_VERSION="0.3.1"
 
 export PATH="$HOME/Library/Application Support/Herd/bin:$PATH"
 
+# ── output ──────────────────────────────────────────────────────────────────
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
+  C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'
+  C_CYAN=$'\033[36m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RED=$'\033[31m'; C_BLUE=$'\033[34m'
+else
+  C_RESET=""; C_BOLD=""; C_DIM=""; C_CYAN=""; C_GREEN=""; C_YELLOW=""; C_RED=""; C_BLUE=""
+fi
+WT_FIELD_WIDTH=9
+
+say()  { printf '  %s▸%s %s\n' "$C_BLUE" "$C_RESET" "$*"; }
+ok()   { printf '  %s✓%s %s%s%s\n' "$C_GREEN" "$C_RESET" "$C_BOLD" "$*" "$C_RESET"; }
+note() { printf '    %s%s%s\n' "$C_DIM" "$*" "$C_RESET"; }
+warn() { printf '  %s⚠%s %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
+die()  { printf '  %s✗%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+field() {
+  printf '    %s%-*s%s %s\n' "$C_DIM" "$WT_FIELD_WIDTH" "$1" "$C_RESET" "$2"
+}
+
 if [[ "${1:-}" == "--version" || "${1:-}" == "version" ]]; then
-  echo "wt $WT_VERSION"
+  printf '%swt%s %s\n' "$C_BOLD" "$C_RESET" "$WT_VERSION"
   exit 0
 fi
 
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-  echo "✗ not inside a git repository" >&2
-  exit 1
-}
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
 MAIN_ROOT="$(git -C "$REPO_ROOT" worktree list --porcelain | head -1 | sed 's/^worktree //')"
 WT_BASE="${MAIN_ROOT}.worktrees"
 
-command -v herd >/dev/null 2>&1 || {
-  echo "✗ wt requires Laravel Herd (https://herd.laravel.com) — the 'herd' CLI was not found" >&2
-  exit 1
-}
+command -v herd >/dev/null 2>&1 \
+  || die "wt requires Laravel Herd (https://herd.laravel.com) — the 'herd' CLI was not found"
 
 # ── defaults (override in ~/.wtrc, then <repo>/.wtrc) ───────────────────────
 WT_APP_DIR="."
@@ -78,7 +91,7 @@ wt_clone_deps() {
       rm -rf "$dst"
     fi
   done < <(find "$MAIN_ROOT" -maxdepth 3 -type d -name .git -prune -o -type d \( -name node_modules -o -name vendor \) -prune -print 2>/dev/null)
-  [[ "$count" -gt 0 ]] && echo "▸ Cloned $count dependency dir(s) from main checkout (APFS copy-on-write)"
+  [[ "$count" -gt 0 ]] && say "Cloned $count dependency dir(s) from main checkout (APFS copy-on-write)"
   return 0
 }
 
@@ -87,7 +100,7 @@ wt_build_assets() {
   compgen -G "$dir/vite.config.*" >/dev/null || return 0
   [[ -f "$dir/package.json" ]] || return 0
   grep -q '"build"' "$dir/package.json" || return 0
-  echo "▸ Building frontend assets"
+  say "Building frontend assets"
   if [[ -f "$wt/pnpm-lock.yaml" || -f "$dir/pnpm-lock.yaml" ]]; then
     (cd "$dir" && pnpm run build)
   elif [[ -f "$wt/yarn.lock" || -f "$dir/yarn.lock" ]]; then
@@ -121,8 +134,7 @@ free_port() {
       return
     fi
   done
-  echo "✗ no free port found in 3001-3050" >&2
-  exit 1
+  die "no free port found in 3001-3050"
 }
 
 # ── database layer: connection derived from the app's .env ──────────────────
@@ -233,9 +245,9 @@ warn_nameless_npm() {
   local wt="$1"
   [[ -f "$wt/package-lock.json" && -f "$wt/package.json" ]] || return 0
   grep -q '"name"' "$wt/package.json" && return 0
-  echo "⚠ package.json has no \"name\" field — npm infers one from the directory and"
-  echo "  rewrites package-lock.json in every worktree. Add a name to stop this;"
-  echo "  wt rm absorbs the rewrite in the meantime."
+  warn "package.json has no \"name\" field — npm infers one from the directory"
+  note "and rewrites package-lock.json in every worktree. Add a name to stop"
+  note "this; wt rm absorbs the rewrite in the meantime."
   return 0
 }
 
@@ -247,7 +259,7 @@ absorb_lockfile_rename() {
   named="$(git -C "$wt" diff -- "$lock" | grep -c '^[+-][[:space:]]*"name":' || true)"
   if [[ "$total" -gt 0 && "$named" -eq "$total" ]]; then
     git -C "$wt" checkout -- "$lock"
-    echo "▸ Restored $lock (npm had renamed it after the worktree directory)"
+    say "Restored $lock (npm had renamed it after the worktree directory)"
   fi
   return 0
 }
@@ -258,7 +270,7 @@ copy_sqlite() {
     [[ -f "$f" ]] || continue
     cp -c "$f" "$wt/$WT_APP_DIR/database/$(basename "$f")" 2>/dev/null \
       || cp "$f" "$wt/$WT_APP_DIR/database/$(basename "$f")"
-    echo "▸ Copied SQLite database $(basename "$f")"
+    say "Copied SQLite database $(basename "$f")"
   done
   return 0
 }
@@ -268,8 +280,11 @@ copy_sqlite() {
 [[ -f "$MAIN_ROOT/.wtrc" ]] && source "$MAIN_ROOT/.wtrc"
 
 usage() {
-  cat >&2 <<'EOF'
-Usage:
+  cat >&2 <<EOF
+
+  ${C_BOLD}wt${C_RESET} ${C_DIM}$WT_VERSION${C_RESET}
+
+  ${C_BOLD}Usage${C_RESET}
   wt new <slug> [branch] [--flags…]   create worktree, DBs, Herd site
                                       (branch defaults to <prefix><slug>; resolves
                                       existing local branch, then origin/<branch>,
@@ -279,10 +294,12 @@ Usage:
   wt --version                        print version
   wt <custom> …                       any wt_cmd_<custom> defined in a .wtrc
 
-Config: ~/.wtrc (global), then <repo>/.wtrc (per repo; add it to
-.git/info/exclude). Zero config works for a plain Laravel repo served by Herd.
-The database connection (driver, host, port, credentials) is read from the
-app's .env — MySQL/MariaDB and Postgres are supported; SQLite files are copied.
+  ${C_BOLD}Config${C_RESET}
+  ~/.wtrc (global), then <repo>/.wtrc (per repo; add it to .git/info/exclude).
+  Zero config works for a plain Laravel repo served by Herd. The database
+  connection (driver, host, port, credentials) is read from the app's .env —
+  MySQL/MariaDB and Postgres are supported; SQLite files are copied.
+
 EOF
   exit 1
 }
@@ -301,14 +318,14 @@ add_worktree() {
   local wt="$1" branch="$2" base
   base="$(default_branch)"
   if git -C "$MAIN_ROOT" show-ref --verify --quiet "refs/heads/$branch"; then
-    echo "▸ Using existing local branch $branch"
+    say "Using existing local branch $branch"
     git -C "$MAIN_ROOT" worktree add "$wt" "$branch"
   elif git -C "$MAIN_ROOT" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-    echo "▸ Fetching and tracking origin/$branch"
+    say "Fetching and tracking origin/$branch"
     git -C "$MAIN_ROOT" fetch origin "$branch"
     git -C "$MAIN_ROOT" worktree add --track -b "$branch" "$wt" "origin/$branch"
   else
-    echo "▸ Creating new branch $branch from $base"
+    say "Creating new branch $branch from $base"
     git -C "$MAIN_ROOT" worktree add "$wt" -b "$branch" "$base"
   fi
 }
@@ -325,7 +342,7 @@ copy_config() {
       mkdir -p "$wt/$(dirname "$item")"
       cp -R "$MAIN_ROOT/$item" "$wt/$item"
     else
-      echo "  (skipping missing $item)"
+      note "(skipping missing $item)"
     fi
   done
 }
@@ -335,7 +352,7 @@ rewrite_env() {
   local env="$wt/$WT_APP_DIR/.env"
   [[ -f "$env" ]] || return 0
 
-  echo "▸ Rewriting $WT_APP_DIR/.env for https://$host"
+  say "Rewriting $WT_APP_DIR/.env for https://$host"
   sed -i '' \
     -e "s|^APP_URL=.*|APP_URL=https://$host|" \
     -e "s|^ASSET_URL=.*|ASSET_URL=https://$host|" \
@@ -375,7 +392,7 @@ cmd_new() {
     esac
   done
   [[ -n "$slug" ]] || usage
-  [[ "$slug" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "✗ slug must be kebab-case" >&2; exit 1; }
+  [[ "$slug" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "slug must be kebab-case"
   branch="${branch:-${WT_BRANCH_PREFIX}${slug}}"
 
   load_db_config
@@ -384,63 +401,64 @@ cmd_new() {
   [[ -n "$WT_TEST_DB_SOURCE" ]] && tdb="$(slug_db "$WT_TEST_DB_SOURCE" "$slug")"
   host="$(wt_host "$slug")"
   site="${host%.test}"
-  [[ -d "$wt" ]] && { echo "✗ $wt already exists" >&2; exit 1; }
+  [[ -d "$wt" ]] && die "$wt already exists"
 
   add_worktree "$wt" "$branch"
 
-  echo "▸ Copying local config"
+  say "Copying local config"
   copy_config "$wt"
   [[ "$DBC_DRIVER" == "sqlite" ]] && copy_sqlite "$wt"
 
   rewrite_env "$wt" "$slug" "$host" "$db"
   wt_env_extra "$wt" "$slug" "$host" "$db"
 
-  echo "▸ Linking Herd site $host${WT_PHP:+ (PHP $WT_PHP)}"
+  say "Linking Herd site $host${WT_PHP:+ (PHP $WT_PHP)}"
   (cd "$wt/$WT_APP_DIR" && herd link "$site" --secure ${WT_PHP:+--isolate="$WT_PHP"})
 
   if [[ -n "$db" ]]; then
-    echo "▸ Cloning database ($WT_DB_SOURCE → $db)"
+    say "Cloning database ($WT_DB_SOURCE → $db)"
     db_clone "$WT_DB_SOURCE" "$db"
   fi
   if [[ -n "$tdb" ]]; then
-    echo "▸ Cloning test database ($WT_TEST_DB_SOURCE → $tdb)"
+    say "Cloning test database ($WT_TEST_DB_SOURCE → $tdb)"
     db_clone "$WT_TEST_DB_SOURCE" "$tdb"
   fi
 
-  echo "▸ Installing dependencies"
+  say "Installing dependencies"
   wt_install "$wt"
   warn_nameless_npm "$wt"
 
   wt_post_create "$wt"
 
   echo ""
-  echo "✓ Worktree ready"
-  echo "  dir:     $wt"
-  echo "  branch:  $branch"
-  echo "  url:     https://$host"
-  [[ -n "$db" ]] && echo "  db:      $db${tdb:+  (test: $tdb)}"
+  ok "Worktree ready"
+  field dir "$wt"
+  field branch "$branch"
+  field url "https://$host"
+  [[ -n "$db" ]] && field db "$db${tdb:+  (test: $tdb)}"
   wt_list_extra "$wt"
 }
 
 cmd_rm() {
   local slug="$1" force="${2:-}"
   load_db_config
-  local wt="$WT_BASE/$slug" db="" tdb="" host site
+  local wt="$WT_BASE/$slug" db="" tdb="" host site branch
   [[ -n "$WT_DB_SOURCE" ]] && db="$(slug_db "$WT_DB_SOURCE" "$slug")"
   [[ -n "$WT_TEST_DB_SOURCE" ]] && tdb="$(slug_db "$WT_TEST_DB_SOURCE" "$slug")"
-  [[ -d "$wt" ]] || { echo "✗ $wt not found" >&2; exit 1; }
+  [[ -d "$wt" ]] || die "$wt not found"
 
   host="$(host_from_worktree "$wt")"
   site="${host%.test}"
+  branch="$(git -C "$wt" branch --show-current 2>/dev/null || true)"
 
   wt_pre_remove "$wt"
 
-  echo "▸ Unlinking Herd site ${site:-$slug}"
+  say "Unlinking Herd site ${site:-$slug}"
   (cd "$wt/$WT_APP_DIR" && herd unlink "${site:-$slug}" >/dev/null 2>&1) || true
 
   absorb_lockfile_rename "$wt"
 
-  echo "▸ Removing worktree"
+  say "Removing worktree"
   if [[ "$force" == "--force" ]]; then
     git -C "$MAIN_ROOT" worktree remove --force "$wt"
   else
@@ -449,49 +467,63 @@ cmd_rm() {
   git -C "$MAIN_ROOT" worktree prune
 
   if [[ -n "$db" || -n "$tdb" ]]; then
-    echo "▸ Dropping databases ${db:+$db }${tdb:+$tdb}"
+    say "Dropping database(s) $(echo "${db:-} ${tdb:-}" | xargs)"
     [[ -n "$db" ]] && db_drop "$db"
     [[ -n "$tdb" ]] && db_drop "$tdb"
   fi
 
-  echo "✓ Removed. Branch was kept — delete with: git branch -d <branch>"
+  echo ""
+  ok "Removed $slug"
+  if [[ -n "$branch" ]]; then
+    note "branch $branch was kept — delete it with: git branch -d $branch"
+  fi
 }
 
 cmd_list() {
   load_db_config
-  local found=0 wt slug branch url db tdb
+  local found=0 wt slug branch url db tdb width=0
   if [[ -d "$WT_BASE" ]]; then
+    for wt in "$WT_BASE"/*/; do
+      [[ -d "$wt" ]] || continue
+      slug="$(basename "$wt")"
+      [[ "${#slug}" -gt "$width" ]] && width="${#slug}"
+    done
+    echo ""
     for wt in "$WT_BASE"/*/; do
       [[ -d "$wt" ]] || continue
       found=1
       slug="$(basename "$wt")"
       branch="$(git -C "$wt" branch --show-current 2>/dev/null || echo '?')"
       url="$(sed -n 's/^APP_URL=//p' "$wt/$WT_APP_DIR/.env" 2>/dev/null)"
-      echo "$slug"
-      echo "  branch:    $branch"
-      echo "  url:       $url"
+      printf '  %s%-*s%s  %s%s%s\n' \
+        "$C_BOLD$C_CYAN" "$width" "$slug" "$C_RESET" "$C_DIM" "$branch" "$C_RESET"
+      field url "$url"
       if [[ -n "$WT_DB_SOURCE" ]]; then
         db="$(slug_db "$WT_DB_SOURCE" "$slug")"
         tdb=""
         [[ -n "$WT_TEST_DB_SOURCE" ]] && tdb="$(slug_db "$WT_TEST_DB_SOURCE" "$slug")"
-        echo "  db:        $db${tdb:+  (test: $tdb)}"
+        field db "$db${tdb:+  (test: $tdb)}"
       fi
       wt_list_extra "$wt"
-      echo "  remove:    wt rm $slug"
+      field remove "wt rm $slug"
       echo ""
     done
   fi
-  [[ "$found" -eq 1 ]] || echo "No worktrees in $WT_BASE"
+  [[ "$found" -eq 1 ]] || printf '  %sNo worktrees in %s%s\n' "$C_DIM" "$WT_BASE" "$C_RESET"
 
   if [[ -n "$WT_DB_SOURCE" && "$DBC_DRIVER" != "sqlite" ]]; then
     local orphans="" dbrow
     while IFS= read -r dbrow; do
       slug="$(echo "${dbrow#"${WT_DB_SOURCE}"_}" | tr '_' '-')"
-      [[ -d "$WT_BASE/$slug" ]] || orphans+="  $dbrow"$'\n'
+      [[ -d "$WT_BASE/$slug" ]] || orphans+="$dbrow"$'\n'
     done < <(db_list_prefix "$WT_DB_SOURCE" 2>/dev/null)
     if [[ -n "$orphans" ]]; then
-      echo "Orphaned worktree DBs (no matching worktree — drop with wt rm, or manually):"
-      printf '%s' "$orphans"
+      warn "Orphaned worktree databases (no matching worktree)"
+      while IFS= read -r dbrow; do
+        [[ -n "$dbrow" ]] && note "$dbrow"
+      done <<< "$orphans"
+      note "drop with wt rm <slug>, or manually"
+      echo ""
     fi
   fi
 }

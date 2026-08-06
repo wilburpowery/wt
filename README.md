@@ -39,6 +39,8 @@ Or drop the `wt` script anywhere on your PATH.
 
 `wt rm <slug>` reverses all of it (the branch is deliberately kept). `wt list` shows every worktree plus any orphaned worktree databases left in MySQL.
 
+Output is colorized when stdout is a terminal, and falls back to plain text automatically when you pipe it somewhere, set `NO_COLOR`, or run under a dumb terminal.
+
 ## Configuration
 
 Zero config works for a plain Laravel app served by Herd: app at the repo root, database derived from `.env`'s `DB_DATABASE`, package manager detected by lockfile.
